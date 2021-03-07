@@ -18,7 +18,7 @@
 package okhttp3.internal
 
 import java.io.Closeable
-import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.InetSocketAddress
@@ -38,7 +38,6 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import kotlin.text.Charsets.UTF_32BE
 import kotlin.text.Charsets.UTF_32LE
-import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.Headers
 import okhttp3.Headers.Companion.headersOf
@@ -49,12 +48,14 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.internal.http2.Header
-import okhttp3.internal.io.FileSystem
 import okio.Buffer
 import okio.BufferedSink
 import okio.BufferedSource
 import okio.ByteString.Companion.decodeHex
+import okio.ExperimentalFileSystem
+import okio.FileSystem
 import okio.Options
+import okio.Path
 import okio.Source
 
 @JvmField
@@ -246,6 +247,14 @@ fun String.indexOfControlOrNonAscii(): Int {
 /** Returns true if this string is not a host name and might be an IP address. */
 fun String.canParseAsIpAddress(): Boolean {
   return VERIFY_AS_IP_ADDRESS.matches(this)
+}
+
+/** Returns true if we should void putting this this header in an exception or toString(). */
+fun isSensitiveHeader(name: String): Boolean {
+  return name.equals("Authorization", ignoreCase = true) ||
+      name.equals("Cookie", ignoreCase = true) ||
+      name.equals("Proxy-Authorization", ignoreCase = true) ||
+      name.equals("Set-Cookie", ignoreCase = true)
 }
 
 /** Returns a [Locale.US] formatted [String]. */
@@ -530,7 +539,8 @@ fun ServerSocket.closeQuietly() {
  *
  * @param file a file in the directory to check. This file shouldn't already exist!
  */
-fun FileSystem.isCivilized(file: File): Boolean {
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.isCivilized(file: Path): Boolean {
   sink(file).use {
     try {
       delete(file)
@@ -540,6 +550,45 @@ fun FileSystem.isCivilized(file: File): Boolean {
   }
   delete(file)
   return false
+}
+
+/** Delete file we expect but don't require to exist. */
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.deleteIfExists(path: Path) {
+  try {
+    delete(path)
+  } catch (fnfe: FileNotFoundException) {
+    return
+  }
+}
+
+/**
+ * Tolerant delete, try to clear as many files as possible even after a failure.
+ */
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.deleteContents(directory: Path) {
+  var exception: IOException? = null
+  val files = try {
+    list(directory)
+  } catch (fnfe: FileNotFoundException) {
+    return
+  }
+  for (file in files) {
+    try {
+      if (metadata(file).isDirectory) {
+        deleteContents(file)
+      }
+
+      delete(file)
+    } catch (ioe: IOException) {
+      if (exception == null) {
+        exception = ioe
+      }
+    }
+  }
+  if (exception != null) {
+    throw exception
+  }
 }
 
 fun Long.toHexString(): String = java.lang.Long.toHexString(this)
