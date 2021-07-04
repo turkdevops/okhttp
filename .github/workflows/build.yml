@@ -1,6 +1,11 @@
 name: build
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false -Dkotlin.incremental=false"
@@ -69,7 +74,7 @@ jobs:
 
   testzulu11:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'zulu')
 
     steps:
       - name: Checkout
@@ -89,7 +94,7 @@ jobs:
 
   testopenjdk8:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdk8')
 
     steps:
       - name: Checkout
@@ -109,7 +114,7 @@ jobs:
 
   testopenjdk8alpn:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdk8')
 
     steps:
       - name: Checkout
@@ -118,6 +123,12 @@ jobs:
       - name: Validate Gradle Wrapper
         uses: gradle/wrapper-validation-action@v1
 
+      - name: Install Old JDK 8
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'adopt'
+          java-version: 8.0.242
+
       - name: Configure JDK
         uses: actions/setup-java@v2
         with:
@@ -125,11 +136,11 @@ jobs:
           java-version: 11
 
       - name: Run Checks
-        run: ./gradlew test -Dtest.java.version=8 -Dalpn.boot.version=8.1.13.v20181017
+        run: ./gradlew test -Dtest.java.version=8 -Dokhttp.platform=jdk8alpn -Dalpn.boot.version=8.1.13.v20181017 -Dorg.gradle.java.installations.paths=/opt/hostedtoolcache/Java_Adopt_jdk/8.0.242-8.1/x64
 
   testopenjsse:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'openjsse')
 
     steps:
       - name: Checkout
@@ -149,7 +160,7 @@ jobs:
 
   testconscrypt:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'conscrypt')
 
     steps:
       - name: Checkout
@@ -169,7 +180,7 @@ jobs:
 
   testbouncycastle:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'bouncycastle')
 
     steps:
       - name: Checkout
@@ -229,7 +240,7 @@ jobs:
 
   testwindows:
     runs-on: windows-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'windows')
 
     steps:
       - name: Checkout
@@ -250,7 +261,7 @@ jobs:
 
   testgraal:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'graal')
 
     steps:
       - name: Checkout
@@ -273,7 +284,7 @@ jobs:
 
   testandroid:
     runs-on: macos-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'android')
 
     strategy:
       fail-fast: false
