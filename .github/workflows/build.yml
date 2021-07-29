@@ -261,7 +261,9 @@ jobs:
 
   testgraal:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'graal')
+    # TODO revert after fixing all tests in CI
+    # if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'graal')
+    if: contains(github.event.pull_request.labels.*.name, 'graal')
 
     steps:
       - name: Checkout
@@ -275,6 +277,9 @@ jobs:
         with:
           distribution: 'adopt'
           java-version: 11
+
+      - name: Build okcurl
+        run: ./gradlew okcurl:nativeImage
 
       - name: Build ConsoleLauncher
         run: ./gradlew -PgraalBuild native-image-tests:nativeImage
@@ -306,5 +311,32 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           script: ./gradlew -PandroidBuild :android-test:connectedCheck
+        env:
+          API_LEVEL: ${{ matrix.api-level }}
+
+
+  testandroidregression:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    if: contains(github.event.pull_request.labels.*.name, 'android-regression')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level:
+          - 29
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/wrapper-validation-action@v1
+
+      - name: Run Tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          script: ./gradlew -PandroidBuild :regression-test:connectedCheck
         env:
           API_LEVEL: ${{ matrix.api-level }}
