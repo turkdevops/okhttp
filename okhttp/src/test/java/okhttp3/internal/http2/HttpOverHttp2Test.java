@@ -18,10 +18,13 @@ package okhttp3.internal.http2;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.net.Authenticator;
 import java.net.HttpURLConnection;
+import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -31,8 +34,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
+import javax.net.SocketFactory;
 import javax.net.ssl.SSLException;
 import mockwebserver3.Dispatcher;
 import mockwebserver3.MockResponse;
@@ -47,6 +52,7 @@ import okhttp3.Callback;
 import okhttp3.Connection;
 import okhttp3.Cookie;
 import okhttp3.Credentials;
+import okhttp3.DelegatingSocketFactory;
 import okhttp3.EventListener;
 import okhttp3.Headers;
 import okhttp3.Interceptor;
@@ -73,6 +79,8 @@ import okio.Buffer;
 import okio.BufferedSink;
 import okio.GzipSink;
 import okio.Okio;
+
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
@@ -442,6 +450,9 @@ public final class HttpOverHttp2Test {
         .setBody(new Buffer().write(new byte[Http2Connection.OKHTTP_CLIENT_WINDOW_SIZE + 1])));
     server.enqueue(new MockResponse()
         .setBody("abc"));
+    // Enqueue an additional response that show if we burnt a good prior response.
+    server.enqueue(new MockResponse()
+      .setBody("XXX"));
 
     Call call1 = client.newCall(new Request.Builder()
         .url(server.url("/"))
@@ -1719,20 +1730,48 @@ public final class HttpOverHttp2Test {
         .setBody("ABC"));
     server.enqueue(new MockResponse()
         .setBody("DEF"));
+    // Enqueue an additional response that show if we burnt a good prior response.
+    server.enqueue(new MockResponse()
+      .setBody("XXX"));
 
-    Call call1 = client.newCall(new Request.Builder()
+    List<RealConnection> connections = new ArrayList<>();
+
+    OkHttpClient localClient = client.newBuilder().eventListener(new EventListener() {
+      @Override
+      public void connectionAcquired(@NotNull Call call, @NotNull Connection connection) {
+        connections.add((RealConnection) connection);
+      }
+    }).build();
+
+    Call call1 = localClient.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());
     Response response1 = call1.execute();
     assertThat(response1.body().string()).isEqualTo("ABC");
 
-    Call call2 = client.newCall(new Request.Builder()
+    // Add delays for DISCONNECT_AT_END to propogate
+    waitForConnectionShutdown(connections.get(0));
+
+    Call call2 = localClient.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());
     Response response2 = call2.execute();
     assertThat(response2.body().string()).isEqualTo("DEF");
     assertThat(server.takeRequest().getSequenceNumber()).isEqualTo(0);
     assertThat(server.takeRequest().getSequenceNumber()).isEqualTo(0);
+  }
+
+  private void waitForConnectionShutdown(RealConnection connection)
+    throws InterruptedException, TimeoutException {
+    if (connection.isHealthy(false)) {
+      Thread.sleep(100L);
+    }
+    if (connection.isHealthy(false)) {
+      Thread.sleep(2000L);
+    }
+    if (connection.isHealthy(false)) {
+      throw new TimeoutException("connection didn't shutdown within timeout");
+    }
   }
 
   /**
@@ -1789,30 +1828,46 @@ public final class HttpOverHttp2Test {
   public void responseHeadersAfterGoaway(
       Protocol protocol, MockWebServer mockWebServer) throws Exception {
     setUp(protocol, mockWebServer);
-    // Flaky https://github.com/square/okhttp/issues/4836
     server.enqueue(new MockResponse()
-        .setHeadersDelay(1, SECONDS)
-        .setBody("ABC"));
+      .setHeadersDelay(1, SECONDS)
+      .setBody("ABC"));
     server.enqueue(new MockResponse()
-        .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END)
-        .setBody("DEF"));
+      .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END)
+      .setBody("DEF"));
+
+    CountDownLatch latch = new CountDownLatch(2);
+    ArrayList<IOException> errors = new ArrayList<>();
 
     BlockingQueue<String> bodies = new LinkedBlockingQueue<>();
     Callback callback = new Callback() {
       @Override public void onResponse(Call call, Response response) throws IOException {
         bodies.add(response.body().string());
+        latch.countDown();
       }
 
       @Override public void onFailure(Call call, IOException e) {
-        System.out.println(e);
+        errors.add(e);
+        latch.countDown();
       }
     };
     client.newCall(new Request.Builder().url(server.url("/")).build()).enqueue(callback);
     client.newCall(new Request.Builder().url(server.url("/")).build()).enqueue(callback);
 
-    assertThat(bodies.poll(3, SECONDS)).isEqualTo("DEF");
-    assertThat(bodies.poll(3, SECONDS)).isEqualTo("ABC");
-    assertThat(server.getRequestCount()).isEqualTo(2);
+    latch.await();
+
+    assertThat(bodies.remove()).isEqualTo("DEF");
+
+    if (errors.isEmpty()) {
+      assertThat(bodies.remove()).isEqualTo("ABC");
+      assertThat(server.getRequestCount()).isEqualTo(2);
+    } else {
+      // https://github.com/square/okhttp/issues/4836
+      // As documented in SocketPolicy, this is known to be flaky.
+      IOException error = errors.get(0);
+      if (!(error instanceof StreamResetException)) {
+        throw error;
+      }
+    }
   }
 
   /**

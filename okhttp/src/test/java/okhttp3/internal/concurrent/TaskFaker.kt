@@ -16,6 +16,7 @@
 package okhttp3.internal.concurrent
 
 import java.util.concurrent.Executors
+import java.util.logging.Logger
 import okhttp3.internal.assertionsEnabled
 import org.assertj.core.api.Assertions.assertThat
 
@@ -44,6 +45,8 @@ class TaskFaker {
 
   @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN", "NOTHING_TO_INLINE")
   internal inline fun Any.notify() = (this as Object).notify()
+
+  internal val logger = Logger.getLogger("TaskFaker." + instance++)
 
   /** Runnables scheduled for execution. These will execute tasks and perform scheduling. */
   private val futureRunnables = mutableListOf<Runnable>()
@@ -117,7 +120,7 @@ class TaskFaker {
         waitingUntilTime = Long.MAX_VALUE
       }
     }
-  })
+  }, logger = logger)
 
   /** Runs all tasks that are ready without advancing the simulated clock. */
   fun runTasks() {
@@ -153,7 +156,7 @@ class TaskFaker {
       val runnable = futureRunnables.removeAt(0)
       currentRunnables.add(runnable)
       if (currentRunnables.size > 1) isParallel = true
-      executorService.execute(Runnable {
+      executorService.execute {
         try {
           runnable.run()
         } finally {
@@ -162,7 +165,7 @@ class TaskFaker {
             taskRunner.notify()
           }
         }
-      })
+      }
       taskRunner.wait() // Wait for the coordinator to stall.
     }
   }
@@ -196,4 +199,8 @@ class TaskFaker {
 
   /** Returns true if no tasks have been scheduled. This runs the coordinator for confirmation. */
   fun isIdle() = taskRunner.activeQueues().isEmpty()
+
+  companion object {
+    var instance = 0
+  }
 }
