@@ -90,11 +90,7 @@ class SocketChannelTest(
     }
 
     val client = clientTestRule.newClientBuilder()
-      .dns(object : Dns {
-        override fun lookup(hostname: String): List<InetAddress> {
-          return listOf(InetAddress.getByName("localhost"))
-        }
-      })
+      .dns { listOf(InetAddress.getByName("localhost")) }
       .callTimeout(4, SECONDS)
       .writeTimeout(2, SECONDS)
       .readTimeout(2, SECONDS)
@@ -197,7 +193,7 @@ class SocketChannelTest(
         listOf(HTTP_1_1, HTTP_2).flatMap { protocol ->
           listOf(TLS_1_3, TLS_1_2).flatMap { tlsVersion ->
             listOf(Channel, Standard).flatMap { socketMode ->
-              listOf(DISABLED, TlsExtensionMode.STANDARD).map { tlsExtensionMode ->
+              listOf(DISABLED, STANDARD).map { tlsExtensionMode ->
                 TlsInstance(provider, protocol, tlsVersion, socketMode, tlsExtensionMode)
               }
             }
