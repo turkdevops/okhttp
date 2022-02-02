@@ -15,17 +15,17 @@
  */
 package okhttp3
 
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.internal.checkOffsetAndCount
-import okio.BufferedSink
-import okio.ByteString
-import okio.source
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.IOException
-import java.nio.charset.Charset
-import kotlin.text.Charsets.UTF_8
+import okhttp3.internal.checkOffsetAndCount
+import okhttp3.internal.chooseCharset
+import okio.BufferedSink
+import okio.ByteString
+import okio.GzipSink
+import okio.buffer
+import okio.source
 
 abstract class RequestBody {
 
@@ -105,17 +105,7 @@ abstract class RequestBody {
     @JvmStatic
     @JvmName("create")
     fun String.toRequestBody(contentType: MediaType? = null): RequestBody {
-      var charset: Charset = UTF_8
-      var finalContentType: MediaType? = contentType
-      if (contentType != null) {
-        val resolvedCharset = contentType.charset()
-        if (resolvedCharset == null) {
-          charset = UTF_8
-          finalContentType = "$contentType; charset=utf-8".toMediaTypeOrNull()
-        } else {
-          charset = resolvedCharset
-        }
-      }
+      val (charset, finalContentType) = contentType.chooseCharset()
       val bytes = toByteArray(charset)
       return bytes.toRequestBody(finalContentType, 0, bytes.size)
     }
@@ -236,5 +226,40 @@ abstract class RequestBody {
         ),
         level = DeprecationLevel.WARNING)
     fun create(contentType: MediaType?, file: File): RequestBody= file.asRequestBody(contentType)
+
+    /**
+     * Returns a gzip version of the RequestBody, with compressed payload.
+     * This is not automatic as not all servers support gzip compressed requests.
+     *
+     * ```
+     * val request = Request.Builder().url("...")
+     *  .addHeader("Content-Encoding", "gzip")
+     *  .post(uncompressedBody.gzip())
+     *  .build()
+     * ```
+     */
+    @JvmStatic
+    fun RequestBody.gzip(): RequestBody {
+      return object : RequestBody() {
+        override fun contentType(): MediaType? {
+          return this@gzip.contentType()
+        }
+
+        override fun contentLength(): Long {
+          return -1 // We don't know the compressed length in advance!
+        }
+
+        @Throws(IOException::class)
+        override fun writeTo(sink: BufferedSink) {
+          val gzipSink = GzipSink(sink).buffer()
+          this@gzip.writeTo(gzipSink)
+          gzipSink.close()
+        }
+
+        override fun isOneShot(): Boolean {
+          return this@gzip.isOneShot()
+        }
+      }
+    }
   }
 }

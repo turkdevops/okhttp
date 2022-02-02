@@ -17,13 +17,13 @@ package okhttp3.logging
 
 import java.io.IOException
 import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets.UTF_8
 import java.util.TreeSet
 import java.util.concurrent.TimeUnit
 import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import okhttp3.internal.charset
 import okhttp3.internal.http.promisesBody
 import okhttp3.internal.platform.Platform
 import okhttp3.logging.internal.isProbablyUtf8
@@ -199,19 +199,30 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
       } else if (requestBody.isOneShot()) {
         logger.log("--> END ${request.method} (one-shot body omitted)")
       } else {
-        val buffer = Buffer()
+        var buffer = Buffer()
         requestBody.writeTo(buffer)
 
-        val contentType = requestBody.contentType()
-        val charset: Charset = contentType?.charset(UTF_8) ?: UTF_8
+        var gzippedLength: Long? = null
+        if ("gzip".equals(headers["Content-Encoding"], ignoreCase = true)) {
+          gzippedLength = buffer.size
+          GzipSource(buffer).use { gzippedResponseBody ->
+            buffer = Buffer()
+            buffer.writeAll(gzippedResponseBody)
+          }
+        }
+
+        val charset: Charset = requestBody.contentType().charset()
 
         logger.log("")
-        if (buffer.isProbablyUtf8()) {
+        if (!buffer.isProbablyUtf8()) {
+          logger.log(
+            "--> END ${request.method} (binary ${requestBody.contentLength()}-byte body omitted)"
+          )
+        } else if (gzippedLength != null) {
+          logger.log("--> END ${request.method} (${buffer.size}-byte, $gzippedLength-gzipped-byte body)")
+        } else {
           logger.log(buffer.readString(charset))
           logger.log("--> END ${request.method} (${requestBody.contentLength()}-byte body)")
-        } else {
-          logger.log(
-              "--> END ${request.method} (binary ${requestBody.contentLength()}-byte body omitted)")
         }
       }
     }
@@ -257,8 +268,7 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
           }
         }
 
-        val contentType = responseBody.contentType()
-        val charset: Charset = contentType?.charset(UTF_8) ?: UTF_8
+        val charset: Charset = responseBody.contentType().charset()
 
         if (!buffer.isProbablyUtf8()) {
           logger.log("")
